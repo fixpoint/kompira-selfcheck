@@ -269,16 +269,18 @@ def import_module(name):
 
 # ---------------------------------------------------------------- environment
 
-def os_store(shell=False):
+def os_store(shell=False, builtin=False):
     """Return (files of the OS CA list used by OpenSSL, short description).
 
     SSL_CERT_FILE / SSL_CERT_DIR are used on Kompira 2.0, where the daemons get the same
     environment as docker exec, and for programs run from this shell (shell=True, e.g. pip).
     The Kompira 1.6 daemons do not get them from this shell, so OpenSSL's built-in defaults
     are used for them (their own settings are checked by check_daemon_env).
+    builtin=True: OpenSSL's built-in defaults, ignoring the variables. git (libcurl) does not
+    read SSL_CERT_FILE / SSL_CERT_DIR and uses its built-in CA file, which is taken to be the same.
     """
     vp = ssl.get_default_verify_paths()
-    env = os.environ if context['kompira2'] or shell else {}
+    env = os.environ if (context['kompira2'] or shell) and not builtin else {}
     file_var, dir_var = vp.openssl_cafile_env, vp.openssl_capath_env
     # A variable that is set, even to an empty value, replaces OpenSSL's default
     cafile = env[file_var] if file_var in env else vp.openssl_cafile
@@ -403,8 +405,17 @@ def file_action(path, what, os_action=None):
 
 def check_os_store(env):
     paths, where = os_store()
-    users = 'urllib, SMTP, git/hg' + (', pip' if pip_uses_os_store(env) else '')
+    git_paths, git_where = os_store(builtin=True)
+    # git (libcurl) does not use SSL_CERT_FILE / SSL_CERT_DIR: when they point elsewhere (Kompira 2.0),
+    # the built-in default file that git uses is checked on its own line
+    git_apart = set(map(os.path.realpath, git_paths)) != set(map(os.path.realpath, paths))
+    users = ('urllib, SMTP, hg' if git_apart else 'urllib, SMTP, git/hg') + (', pip' if pip_uses_os_store(env) else '')
     check_sources('OS CA list (%s)' % users, [('OS CA list', paths, where)], {'OS CA list': os_store_action()})
+    if git_apart:
+        check_sources('OS CA list for git (built-in default; git does not use SSL_CERT_FILE / SSL_CERT_DIR)',
+                      [('OS CA list', git_paths, git_where)],
+                      {'OS CA list': advisory_step('Apply the OS vendor fix or the interim mitigation (advisory 4.2 step 2).',
+                                                   'Apply step A or B (advisory 4.4).')})
 
 
 def requests_bundle():
@@ -552,14 +563,26 @@ def check_pip(env):
     certs, everywhere, _, _ = pip_config()
     var, bundle = requests_bundle()
     # Python 3.10+ and pip 24.2+ (truststore, unless legacy-certs): the bundled certifi and the OS CA list,
-    # plus the cert file if set.
+    # plus the cert file or REQUESTS_CA_BUNDLE if set.
     # pip 22.2 to 24.1 with truststore enabled (use-feature): the OS CA list, plus what pip uses without it.
-    # Otherwise: the cert file replaces the bundled certifi (for the commands it applies to).
-    # REQUESTS_CA_BUNDLE can replace both. To be on the safe side, all of them are checked together.
+    # Otherwise, as in requests: REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE if set (it takes precedence over the
+    # cert file while requests reads the environment), else the cert file if set (for the commands it
+    # applies to), else the bundled certifi. The files that can be used are checked together.
+    # The cert file and the bundled certifi are left out because of REQUESTS_CA_BUNDLE only where pip
+    # surely reads it (bundle_first):
+    # - pip 24.1+ stops reading the environment when a proxy is set (pip.conf, PIP_PROXY or --proxy,
+    #   which this script cannot see), so pip 24.1+ is not trusted to use the variable (this is not the
+    #   24.2 boundary of truststore above);
+    # - only on Kompira 2.0, where the variable comes from the container environment and also applies to
+    #   pip run by docker exec. On Kompira 1.6 it may be set only in the shell running this script.
     truststore = pip_uses_os_store(env)
     with_certifi = truststore and version_tuple(ver) >= (24, 2)    # pip 24.2+ loads it into truststore
+    pip_ver = version_tuple(ver)    # () when unknown: not taken as older than 24.1
+    bundle_first = bool(bundle) and context['kompira2'] and bool(pip_ver) and pip_ver < (24, 1)
     os_action = os_store_action(shell=True)          # pip is run from this shell
     sources, actions = [], {}
+    if bundle_first:
+        certs = []
     for cert in certs:
         sources.append(('the cert file of pip', ca_files(cert), cert))
     if certs:
@@ -568,7 +591,7 @@ def check_pip(env):
     if bundle:
         sources.append((var, ca_files(bundle), bundle))
         actions[var] = file_action(bundle, var, os_action)
-    if with_certifi or not everywhere:
+    if with_certifi or not (everywhere or bundle_first):
         sources.append(("pip's bundled certifi", [pip_certifi.where()], pip_certifi.where()))
         if OLD_PYTHON:
             fix = OLD_PYTHON_FIX
