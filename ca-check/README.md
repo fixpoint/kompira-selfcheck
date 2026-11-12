@@ -18,8 +18,8 @@
 Release から、スクリプトとハッシュ値のファイル (`SHA256SUMS`) をダウンロードし、ハッシュ値を確かめてから使ってください。
 
 ```sh
-curl -fsSLO https://github.com/fixpoint/kompira-selfcheck/releases/download/ca-check-v1.0.0/kompira-ca-check.py
-curl -fsSLO https://github.com/fixpoint/kompira-selfcheck/releases/download/ca-check-v1.0.0/SHA256SUMS
+curl -fsSLO https://github.com/fixpoint/kompira-selfcheck/releases/download/ca-check-v1.0.1/kompira-ca-check.py
+curl -fsSLO https://github.com/fixpoint/kompira-selfcheck/releases/download/ca-check-v1.0.1/SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 

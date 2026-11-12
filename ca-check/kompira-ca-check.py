@@ -51,7 +51,7 @@ import ssl
 import subprocess
 import traceback
 
-TOOL_VERSION = '1.0.0'
+TOOL_VERSION = '1.0.1'
 
 # SHA-256 fingerprints of the root certificates distrusted after the incident
 DISTRUSTED_ROOTS = {
